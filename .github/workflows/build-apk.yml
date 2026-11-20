@@ -1,1 +1,69 @@
+name: Build Mustamaskati APK
 
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Find and extract uploaded project archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p outer inner
+          OUTER_ZIP="$(find . -maxdepth 3 -type f -name '*.zip' | head -n 1)"
+          if [ -z "${OUTER_ZIP:-}" ]; then
+            echo 'No ZIP archive found in the repository.'
+            exit 1
+          fi
+          echo "Using archive: $OUTER_ZIP"
+          unzip -q "$OUTER_ZIP" -d outer
+          INNER_ZIP="$(find outer -type f -name '*Android*GitHub*.zip' | head -n 1 || true)"
+          if [ -n "${INNER_ZIP:-}" ]; then
+            echo "Extracting Android project archive: $INNER_ZIP"
+            unzip -q "$INNER_ZIP" -d inner
+          else
+            echo 'No nested Android ZIP found; using extracted files directly.'
+            cp -a outer/. inner/
+          fi
+          SETTINGS_FILE="$(find inner -type f -name settings.gradle -o -name settings.gradle.kts | head -n 1)"
+          if [ -z "${SETTINGS_FILE:-}" ]; then
+            echo 'Could not find settings.gradle in the uploaded archive.'
+            find inner -maxdepth 4 -type f | sort | head -n 100
+            exit 1
+          fi
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Android project found at: $PROJECT_DIR"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build debug APK
+        run: gradle --no-daemon -p "$PROJECT_DIR" assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mustamaskati-debug-apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
